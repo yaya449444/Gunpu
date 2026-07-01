@@ -1,0 +1,36 @@
+{
+  "name": "滚谱 - 乐器跟谱工具",
+  "short_name": "滚谱",
+  "description": "钢琴/乐器跟谱工具——管理并播放曲谱图片",
+  "start_url": "/index.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f1f5f9",
+  "theme_color": "#6366f1",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "share_target": {
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "action": "/index.html?shared=1",
+    "params": {
+      "files": [
+        { "name": "file", "accept": ["image/*"] }
+      ]
+    }
+  },
+  "file_handlers": [
+    {
+      "action": "/index.html?shared=1",
+      "accept": {
+        "image/*": [".jpg", ".jpeg", ".png", ".webp"]
+      }
+    }
+  ]
+}

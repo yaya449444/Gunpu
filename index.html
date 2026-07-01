@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>滚谱 - 乐器跟谱工具</title>
+  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="manifest" href="manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="滚谱">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <script type="importmap">
+  {
+    "imports": {
+      "idb": "https://cdn.jsdelivr.net/npm/idb@8.0.0/+esm"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <!-- Loading overlay -->
+    <div id="loadingOverlay" class="loading-overlay hidden">
+      <div class="spinner"></div>
+      <p id="loadingText">加载中...</p>
+    </div>
+
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <h1 class="app-title">🎹 滚谱</h1>
+        <span class="app-subtitle">乐器跟谱工具</span>
+      </div>
+      <div class="header-actions">
+        <button id="exportBtn" class="btn-secondary" title="导出备份">📤 导出备份</button>
+        <button id="importBtn" class="btn-secondary" title="可导入备份的json文件">📥 导入曲谱</button>
+        <button id="newScoreBtn" class="btn-primary">＋ 新建曲谱</button>
+      </div>
+      <input type="file" id="importInput" accept=".json" hidden>
+    </header>
+
+    <!-- Main layout -->
+    <div class="main-layout" id="mainLayout">
+      <!-- Sidebar: score list -->
+      <aside class="sidebar" id="sidebar">
+        <h2 class="sidebar-title">我的曲谱</h2>
+        <div id="scoreList" class="score-list"></div>
+        <div id="emptyList" class="empty-list">
+          <div class="empty-icon">🎶</div>
+          <p>还没有曲谱</p>
+          <p class="empty-hint">点击右上角「新建曲谱」开始</p>
+        </div>
+      </aside>
+
+      <!-- Editor area -->
+      <main class="editor" id="editor">
+        <!-- Empty state (no score loaded) -->
+        <div id="emptyEditor" class="empty-editor">
+          <div class="empty-icon">🎼</div>
+          <p>选择已有曲谱开始练习</p>
+          <p class="empty-hint">或点击「新建曲谱」上传曲谱图片</p>
+        </div>
+
+        <!-- Active editor -->
+        <div id="activeEditor" class="active-editor hidden">
+          <!-- Editor header -->
+          <div class="editor-header">
+            <h2 id="browseScoreName" class="browse-score-name hidden"></h2>
+            <input type="text" id="scoreName" class="score-name-input" placeholder="请输入曲谱名称（如「梦中的婚礼」）" maxlength="50">
+            <button id="editBtn" class="btn-secondary hidden">✏️ 编辑</button>
+            <div class="editor-actions">
+              <button id="saveBtn" class="btn-primary hidden" title="保存曲谱">💾 保存</button>
+              <button id="backBtn" class="btn-secondary hidden" title="返回">← 返回</button>
+            </div>
+          </div>
+
+          <!-- Upload zone -->
+          <div id="uploadZone" class="upload-zone">
+            <div class="upload-icon">📁</div>
+            <p class="upload-text">点击上传或拖拽图片到这里</p>
+            <p class="upload-hint">💡 支持 JPG / PNG / WebP，也可以截图后直接 <kbd>Ctrl+V</kbd> / <kbd>Cmd+V</kbd> 粘贴</p>
+            <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp" multiple hidden>
+          </div>
+
+          <!-- Thumbnail strip -->
+          <div id="thumbnailContainer" class="thumbnail-container hidden">
+            <div class="thumbnail-header">
+              <h3>图片列表</h3>
+              <span id="imageCount" class="image-count">0 张</span>
+            </div>
+            <div id="thumbnailList" class="thumbnail-list"></div>
+          </div>
+
+          <!-- Playback controls -->
+          <div id="controls" class="controls hidden">
+            <button id="playBtn" class="btn-play">▶ 播放</button>
+            <div class="speed-control">
+              <label for="speedSlider">速度</label>
+              <input type="range" id="speedSlider" min="0.3" max="3.0" step="0.1" value="1.0">
+              <span id="speedDisplay">1.0x</span>
+            </div>
+            <div class="zoom-control">
+              <label for="zoomSlider">缩放</label>
+              <input type="range" id="zoomSlider" min="0.5" max="1.0" step="0.1" value="1.0">
+              <span id="zoomDisplay">100%</span>
+            </div>
+            <button id="resetBtn" class="btn-secondary" title="回到顶部">⏮ 回到顶部</button>
+            <button id="fullscreenBtn" class="btn-secondary" title="全屏">⛶ 全屏</button>
+          </div>
+
+          <!-- Merged score viewer -->
+          <div id="scoreViewer" class="score-viewer hidden">
+            <img id="mergedImage" alt="曲谱">
+          </div>
+
+          <!-- Fullscreen overlay -->
+          <div id="fullscreenOverlay" class="fullscreen-overlay hidden">
+            <div id="fullscreenViewer" class="fullscreen-viewer">
+              <img id="fullscreenImage" alt="曲谱">
+            </div>
+            <div id="fullscreenControls" class="fullscreen-controls">
+              <div class="fullscreen-controls-inner">
+                <button id="fsPlayBtn" class="fs-btn-play">▶ 播放</button>
+                <div class="fs-speed-control">
+                  <label>速度</label>
+                  <input type="range" id="fsSpeedSlider" min="0.3" max="3.0" step="0.1" value="1.0">
+                  <span id="fsSpeedDisplay">1.0x</span>
+                </div>
+                <div class="fs-zoom-control">
+                  <label>缩放</label>
+                  <input type="range" id="fsZoomSlider" min="0.5" max="1.0" step="0.1" value="1.0">
+                  <span id="fsZoomDisplay">100%</span>
+                </div>
+                <button id="fsExitBtn" class="fs-btn" title="退出全屏">⛶ 退出全屏</button>
+              </div>
+            </div>
+            <button id="fsExitBtnTop" class="fs-btn fs-btn-top" title="退出全屏">⛶ 退出</button>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- Footer -->
+    <footer class="app-footer">🔒 所有数据仅保存在本地浏览器</footer>
+  </div>
+
+  <script type="module" src="script.js?v=3"></script>
+</body>
+</html>
