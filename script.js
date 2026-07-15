@@ -4,7 +4,7 @@ import { openDB } from 'idb';
 const DB_NAME = 'roll-score';
 const DB_VERSION = 1;
 const STORE_NAME = 'scores';
-const SCROLL_BASE_SPEED = 20; // px/s at 1.0x speed
+const SCROLL_BASE_SPEED = 5; // px/s at 1.0x speed
 const SHARE_CACHE = 'roll-score-shared-v1';
 
 /* ===== State ===== */
@@ -22,6 +22,9 @@ const state = {
   mergedUrl: null,          // Object URL for merged image
   isFullscreen: false,
   fsIdleTimer: null,
+  delay: 0,
+  countdownRemaining: 0,
+  countdownTimer: null,
 };
 
 let db = null;
@@ -52,8 +55,9 @@ const dom = {
   imageCount: $('imageCount'),
   controls: $('controls'),
   playBtn: $('playBtn'),
-  speedSlider: $('speedSlider'),
   speedDisplay: $('speedDisplay'),
+  delayDisplay: $('delayDisplay'),
+  zoomDisplay: $('zoomDisplay'),
   resetBtn: $('resetBtn'),
   scoreViewer: $('scoreViewer'),
   mergedImage: $('mergedImage'),
@@ -62,15 +66,16 @@ const dom = {
   fullscreenImage: $('fullscreenImage'),
   fullscreenControls: $('fullscreenControls'),
   fsPlayBtn: $('fsPlayBtn'),
-  fsSpeedSlider: $('fsSpeedSlider'),
   fsSpeedDisplay: $('fsSpeedDisplay'),
+  fsDelayDisplay: $('fsDelayDisplay'),
+  fsZoomDisplay: $('fsZoomDisplay'),
   fsExitBtn: $('fsExitBtn'),
   fsExitBtnTop: $('fsExitBtnTop'),
   fullscreenBtn: $('fullscreenBtn'),
-  zoomSlider: $('zoomSlider'),
-  zoomDisplay: $('zoomDisplay'),
-  fsZoomSlider: $('fsZoomSlider'),
-  fsZoomDisplay: $('fsZoomDisplay'),
+  countdownBadge: $('countdownBadge'),
+  fsCountdownBadge: $('fsCountdownBadge'),
+  scrollWrapper: $('scrollWrapper'),
+  fsScrollWrapper: $('fsScrollWrapper'),
 };
 
 /* ===== IndexedDB ===== */
@@ -418,20 +423,17 @@ async function createNewScore() {
     scrollPosition: 0,
     speed: 1.0,
     zoom: 1.0,
+    delay: 0,
   };
   state.currentId = null;
   state.isPlaying = false;
   state.speed = 1.0;
   state.zoom = 1.0;
+  state.delay = 0;
 
-  dom.speedSlider.value = '1.0';
-  dom.speedDisplay.textContent = '1.0x';
-  dom.speedSlider.style.setProperty('--val', (1.0 - 0.3) / 2.7);
-  dom.fsSpeedSlider.style.setProperty('--val', (1.0 - 0.3) / 2.7);
-  dom.zoomSlider.value = '1.0';
-  dom.zoomDisplay.textContent = '100%';
-  dom.zoomSlider.style.setProperty('--val', (1.0 - 0.5) / 0.5);
-  dom.fsZoomSlider.style.setProperty('--val', (1.0 - 0.5) / 0.5);
+  updateSpeed(1.0);
+  updateZoom(1.0);
+  updateDelay(0);
 
   showEditor('edit');
   dom.scoreName.focus();
@@ -456,15 +458,11 @@ async function loadScoreToEditor(id) {
     state.currentId = score.id;
     state.speed = score.speed || 1.0;
     state.zoom = Math.min(score.zoom || 1.0, 1.0);
+    state.delay = score.delay || 0;
 
-    dom.speedSlider.value = String(state.speed);
-    dom.speedDisplay.textContent = state.speed.toFixed(1) + 'x';
-    dom.speedSlider.style.setProperty('--val', (state.speed - 0.3) / 2.7);
-    dom.fsSpeedSlider.style.setProperty('--val', (state.speed - 0.3) / 2.7);
-    dom.zoomSlider.value = String(state.zoom);
-    dom.zoomDisplay.textContent = Math.round(state.zoom * 100) + '%';
-    dom.zoomSlider.style.setProperty('--val', (state.zoom - 0.5) / 0.5);
-    dom.fsZoomSlider.style.setProperty('--val', (state.zoom - 0.5) / 0.5);
+    updateSpeed(state.speed);
+    updateZoom(state.zoom);
+    updateDelay(state.delay);
 
     showEditor('browse');
     applyZoom();
@@ -484,6 +482,8 @@ function cleanupCurrentScore() {
   if (state.isFullscreen) exitFullscreen();
   revokeThumbnails();
   revokeMergedUrl();
+  dom.scrollWrapper.style.transform = 'translateY(0)';
+  dom.fsScrollWrapper.style.transform = 'translateY(0)';
   state.currentScore = null;
   state.currentId = null;
 }
@@ -612,6 +612,7 @@ async function saveCurrentScore() {
     state.currentScore.scrollPosition = dom.scoreViewer.scrollTop || 0;
     state.currentScore.speed = state.speed;
     state.currentScore.zoom = state.zoom;
+    state.currentScore.delay = state.delay;
 
     // If it's a new score (not yet saved), set the creation time
     if (!state.currentId) {
@@ -653,19 +654,94 @@ async function refreshScoreList() {
 
 /* ===== Playback ===== */
 
+
 function togglePlayback() {
-  if (state.isPlaying) {
+  if (state.countdownTimer !== null) {
+    // Cancel countdown mid-flight
+    cancelCountdown();
+    state.isPlaying = false;
+    updatePlayButton();
+  } else if (state.isPlaying) {
     pausePlayback();
   } else {
-    startPlayback();
+    // Check if we should start with a delay
+    const atTop = dom.scoreViewer.scrollTop < 10;
+    if (state.delay > 0 && atTop && state.countdownRemaining === 0) {
+      state.countdownRemaining = state.delay;
+      startCountdown();
+    } else if (state.delay > 0 && atTop && state.countdownRemaining > 0) {
+      // Resuming from a paused countdown
+      startCountdown();
+    } else {
+      startScrolling();
+    }
   }
 }
 
-function startPlayback() {
+function startCountdown() {
   if (!state.currentScore?.mergedBlob) return;
 
+  // Cancel any pending fullscreen auto-hide timer set before countdown started
+  if (state.fsIdleTimer) {
+    clearTimeout(state.fsIdleTimer);
+    state.fsIdleTimer = null;
+  }
+  showFsControls();
+
   state.isPlaying = true;
-  state.scrollAccum = dom.scoreViewer.scrollTop;
+  updatePlayButton();
+  showCountdownOverlay();
+
+  const startTime = performance.now();
+  const totalRemaining = state.countdownRemaining;
+
+  function tick(time) {
+    if (state.countdownTimer === null) return;
+    const elapsed = (time - startTime) / 1000;
+    const remaining = Math.max(0, totalRemaining - elapsed);
+    const display = Math.ceil(remaining);
+    updateCountdownDisplay(display);
+    if (remaining <= 0) {
+      hideCountdownOverlay();
+      startScrolling();
+      return;
+    }
+    state.countdownTimer = requestAnimationFrame(tick);
+  }
+  state.countdownTimer = requestAnimationFrame(tick);
+}
+
+function cancelCountdown() {
+  if (state.countdownTimer) {
+    cancelAnimationFrame(state.countdownTimer);
+    state.countdownTimer = null;
+  }
+  state.countdownRemaining = 0;
+  hideCountdownOverlay();
+}
+
+function showCountdownOverlay() {
+  dom.countdownBadge.classList.remove('hidden');
+  dom.fsCountdownBadge.classList.remove('hidden');
+}
+
+function hideCountdownOverlay() {
+  dom.countdownBadge.classList.add('hidden');
+  dom.fsCountdownBadge.classList.add('hidden');
+}
+
+function updateCountdownDisplay(seconds) {
+  const text = String(Math.max(1, seconds));
+  dom.countdownBadge.textContent = text;
+  dom.fsCountdownBadge.textContent = text;
+}
+
+function startScrolling() {
+  cancelCountdown();
+  if (!state.currentScore?.mergedBlob) return;
+  state.isPlaying = true;
+  const activeViewer = state.isFullscreen ? dom.fullscreenViewer : dom.scoreViewer;
+  state.scrollAccum = activeViewer.scrollTop;
   updatePlayButton();
 
   let lastTime = performance.now();
@@ -675,17 +751,41 @@ function startPlayback() {
     const delta = (time - lastTime) / 1000;
     lastTime = time;
     state.scrollAccum += delta * SCROLL_BASE_SPEED * state.speed;
-    dom.scoreViewer.scrollTop = state.scrollAccum;
+
+    // Check if we've reached the bottom
+    const viewer = state.isFullscreen ? dom.fullscreenViewer : dom.scoreViewer;
+    const maxScroll = viewer.scrollHeight - viewer.clientHeight;
+    if (state.scrollAccum >= maxScroll) {
+      state.scrollAccum = maxScroll;
+      dom.scoreViewer.scrollTop = maxScroll;
+      dom.scrollWrapper.style.transform = 'translateY(0)';
+      if (state.isFullscreen) {
+        dom.fullscreenViewer.scrollTop = maxScroll;
+        dom.fsScrollWrapper.style.transform = 'translateY(0)';
+      }
+      pausePlayback();
+      return;
+    }
+
+    const intPart = Math.floor(state.scrollAccum);
+    const fracPart = state.scrollAccum - intPart;
+    dom.scoreViewer.scrollTop = intPart;
+    dom.scrollWrapper.style.transform = `translateY(${-fracPart}px)`;
     if (state.isFullscreen) {
-      dom.fullscreenViewer.scrollTop = state.scrollAccum;
+      dom.fullscreenViewer.scrollTop = intPart;
+      dom.fsScrollWrapper.style.transform = `translateY(${-fracPart}px)`;
     }
     state.rafId = requestAnimationFrame(animate);
   }
 
   state.rafId = requestAnimationFrame(animate);
+
+  // Restart fullscreen idle timer now that countdown ended
+  if (state.isFullscreen) resetFsIdleTimer();
 }
 
 function pausePlayback() {
+  cancelCountdown();
   state.isPlaying = false;
   if (state.rafId) {
     cancelAnimationFrame(state.rafId);
@@ -695,46 +795,51 @@ function pausePlayback() {
 }
 
 function resetPlayback() {
+  cancelCountdown();
   pausePlayback();
   state.scrollAccum = 0;
   dom.scoreViewer.scrollTop = 0;
+  dom.scrollWrapper.style.transform = 'translateY(0)';
   if (state.isFullscreen) {
     dom.fullscreenViewer.scrollTop = 0;
+    dom.fsScrollWrapper.style.transform = 'translateY(0)';
   }
 }
 
 function updateSpeed(value) {
-  state.speed = parseFloat(value);
-  dom.speedSlider.value = String(state.speed);
-  dom.fsSpeedSlider.value = String(state.speed);
-  dom.speedDisplay.textContent = state.speed.toFixed(1) + 'x';
-  dom.fsSpeedDisplay.textContent = state.speed.toFixed(1) + 'x';
+  state.speed = Math.max(0.3, Math.min(3.0, parseFloat(value)));
+  const text = state.speed.toFixed(1) + 'x';
+  dom.speedDisplay.textContent = text;
+  dom.fsSpeedDisplay.textContent = text;
+}
 
-  // Update slider fill (range: 0.3 ~ 3.0)
-  const pct = (state.speed - 0.3) / 2.7;
-  dom.speedSlider.style.setProperty('--val', pct);
-  dom.fsSpeedSlider.style.setProperty('--val', pct);
+function updateDelay(value) {
+  state.delay = Math.max(0, Math.min(60, Math.round(value)));
+  const text = state.delay + 's';
+  dom.delayDisplay.textContent = text;
+  dom.fsDelayDisplay.textContent = text;
 }
 
 function updateZoom(value) {
-  state.zoom = parseFloat(value);
-  dom.zoomSlider.value = String(state.zoom);
-  dom.fsZoomSlider.value = String(state.zoom);
+  state.zoom = Math.max(0.5, Math.min(1.0, parseFloat(value)));
   const pct = Math.round(state.zoom * 100) + '%';
   dom.zoomDisplay.textContent = pct;
   dom.fsZoomDisplay.textContent = pct;
   applyZoom();
-
-  // Update slider fill (range: 0.5 ~ 1.0)
-  const fill = (state.zoom - 0.5) / 0.5;
-  dom.zoomSlider.style.setProperty('--val', fill);
-  dom.fsZoomSlider.style.setProperty('--val', fill);
 }
 
 function applyZoom() {
   const pct = (state.zoom * 100).toFixed(0) + '%';
   dom.mergedImage.style.width = pct;
   dom.fullscreenImage.style.width = pct;
+}
+
+function adjustValue(ctrl, dir) {
+  switch (ctrl) {
+    case 'speed': updateSpeed(+(state.speed + dir * 0.1).toFixed(1)); break;
+    case 'delay': updateDelay(state.delay + dir); break;
+    case 'zoom':  updateZoom(+(state.zoom + dir * 0.1).toFixed(1)); break;
+  }
 }
 
 /* ===== Fullscreen ===== */
@@ -756,19 +861,18 @@ function enterFullscreen() {
   dom.fsPlayBtn.textContent = state.isPlaying ? '⏸ 暂停' : '▶ 播放';
   dom.fsPlayBtn.classList.toggle('playing', state.isPlaying);
 
-  // Sync fullscreen speed
-  dom.fsSpeedSlider.value = String(state.speed);
+  // Sync fullscreen displays
   dom.fsSpeedDisplay.textContent = state.speed.toFixed(1) + 'x';
-  dom.fsSpeedSlider.style.setProperty('--val', (state.speed - 0.3) / 2.7);
-
-  // Sync fullscreen zoom
-  dom.fsZoomSlider.value = String(state.zoom);
   dom.fsZoomDisplay.textContent = Math.round(state.zoom * 100) + '%';
-  dom.fsZoomSlider.style.setProperty('--val', (state.zoom - 0.5) / 0.5);
+  dom.fsDelayDisplay.textContent = state.delay + 's';
   applyZoom();
 
   // Show overlay
   dom.fullscreenOverlay.classList.remove('hidden');
+
+  // Reset wrapper transforms
+  dom.scrollWrapper.style.transform = 'translateY(0)';
+  dom.fsScrollWrapper.style.transform = 'translateY(0)';
 
   // Restore scroll position in fullscreen viewer
   dom.fullscreenViewer.scrollTop = state.currentScore.scrollPosition || 0;
@@ -793,6 +897,10 @@ function exitFullscreen() {
 
   // Hide overlay
   dom.fullscreenOverlay.classList.add('hidden');
+
+  // Reset wrapper transforms
+  dom.scrollWrapper.style.transform = 'translateY(0)';
+  dom.fsScrollWrapper.style.transform = 'translateY(0)';
 
   // Save scroll position from fullscreen viewer, then restore in main viewer
   if (state.currentScore) {
@@ -822,8 +930,9 @@ function resetFsIdleTimer() {
     clearTimeout(state.fsIdleTimer);
   }
   showFsControls();
-  // Don't auto-hide on touch devices
+  // Don't auto-hide on touch devices or during countdown
   if (matchMedia('(hover: none)').matches) return;
+  if (state.countdownTimer !== null) return;
   state.fsIdleTimer = setTimeout(hideFsControls, 3000);
 }
 
@@ -889,6 +998,7 @@ async function exportBackup() {
         scrollPosition: score.scrollPosition || 0,
         speed: score.speed || 1.0,
         zoom: score.zoom || 1.0,
+        delay: score.delay || 0,
         imageBlobs: [],
       };
 
@@ -975,6 +1085,7 @@ async function importBackup(file) {
         scrollPosition: 0,
         speed: scoreData.speed || 1.0,
         zoom: scoreData.zoom || 1.0,
+        delay: scoreData.delay || 0,
       };
 
       await putScore(score);
@@ -1105,6 +1216,54 @@ function setupLaunchQueue() {
   }
 }
 
+/* ===== Stepper long-press support ===== */
+
+function setupStepperListeners(container) {
+  container.addEventListener('click', (e) => {
+    const btn = e.target.closest('.stepper-btn');
+    if (!btn) return;
+    adjustValue(btn.dataset.ctrl, parseInt(btn.dataset.dir));
+  });
+
+  // Long press: start repeating after 300ms, then every 120ms
+  container.addEventListener('mousedown', (e) => {
+    const btn = e.target.closest('.stepper-btn');
+    if (!btn || e.button !== 0) return;
+    let interval = null;
+    const timeout = setTimeout(() => {
+      interval = setInterval(() => adjustValue(btn.dataset.ctrl, parseInt(btn.dataset.dir)), 120);
+    }, 300);
+
+    const stop = () => {
+      clearTimeout(timeout);
+      if (interval) clearInterval(interval);
+      interval = null;
+    };
+
+    btn.addEventListener('mouseup', stop, { once: true });
+    btn.addEventListener('mouseleave', stop, { once: true });
+  });
+
+  // Touch long press for mobile
+  container.addEventListener('touchstart', (e) => {
+    const btn = e.target.closest('.stepper-btn');
+    if (!btn) return;
+    let interval = null;
+    const timeout = setTimeout(() => {
+      interval = setInterval(() => adjustValue(btn.dataset.ctrl, parseInt(btn.dataset.dir)), 120);
+    }, 300);
+
+    const stop = () => {
+      clearTimeout(timeout);
+      if (interval) clearInterval(interval);
+      interval = null;
+    };
+
+    btn.addEventListener('touchend', stop, { once: true });
+    btn.addEventListener('touchcancel', stop, { once: true });
+  }, { passive: true });
+}
+
 /* ===== Event setup ===== */
 
 function setupEventListeners() {
@@ -1141,18 +1300,15 @@ function setupEventListeners() {
   // Play/pause
   dom.playBtn.addEventListener('click', togglePlayback);
 
-  // Speed slider
-  dom.speedSlider.addEventListener('input', (e) => updateSpeed(e.target.value));
-
-  // Zoom slider
-  dom.zoomSlider.addEventListener('input', (e) => updateZoom(e.target.value));
+  // Stepper buttons (controls bar)
+  setupStepperListeners(dom.controls);
 
   // Reset
   dom.resetBtn.addEventListener('click', resetPlayback);
 
   // Fullscreen toggle
   dom.fullscreenBtn.addEventListener('click', toggleFullscreen);
-  dom.fsExitBtn.addEventListener('click', exitFullscreen);
+  dom.fsExitBtn.addEventListener('click', resetPlayback);
   dom.fsExitBtnTop.addEventListener('click', exitFullscreen);
 
   // Upload zone click → file input
@@ -1203,18 +1359,29 @@ function setupEventListeners() {
     }
   });
 
-  // Fullscreen: play/pause and speed
-  dom.fsPlayBtn.addEventListener('click', togglePlayback);
-  dom.fsSpeedSlider.addEventListener('input', (e) => {
-    updateSpeed(e.target.value);
-    dom.fsSpeedSlider.value = e.target.value;
+  // User manual scroll during playback → detect vs programmatic scroll
+  dom.scoreViewer.addEventListener('scroll', () => {
+    if (!state.isPlaying) return;
+    const current = dom.scoreViewer.scrollTop;
+    const expected = Math.floor(state.scrollAccum);
+    if (current !== expected) {
+      state.scrollAccum = current;
+      dom.scrollWrapper.style.transform = 'translateY(0)';
+    }
+  });
+  dom.fullscreenViewer.addEventListener('scroll', () => {
+    if (!state.isPlaying) return;
+    const current = dom.fullscreenViewer.scrollTop;
+    const expected = Math.floor(state.scrollAccum);
+    if (current !== expected) {
+      state.scrollAccum = current;
+      dom.fsScrollWrapper.style.transform = 'translateY(0)';
+    }
   });
 
-  // Zoom slider (fullscreen)
-  dom.fsZoomSlider.addEventListener('input', (e) => {
-    updateZoom(e.target.value);
-    dom.fsZoomSlider.value = e.target.value;
-  });
+  // Fullscreen: play/pause and stepper buttons
+  dom.fsPlayBtn.addEventListener('click', togglePlayback);
+  setupStepperListeners(dom.fullscreenControls.querySelector('.fullscreen-controls-inner'));
 
   // Fullscreen overlay: idle timer on mouse/touch activity
   dom.fullscreenOverlay.addEventListener('mousemove', resetFsIdleTimer);
@@ -1259,6 +1426,7 @@ function setupEventListeners() {
       state.currentScore.scrollPosition = activeViewer.scrollTop || 0;
       state.currentScore.speed = state.speed;
       state.currentScore.zoom = state.zoom;
+      state.currentScore.delay = state.delay;
       putScore(state.currentScore).catch(() => {});
     }
   });

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>滚谱 - 乐器跟谱工具</title>
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="style.css?v=6">
   <link rel="manifest" href="manifest.json">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -80,7 +80,7 @@
             <div class="upload-icon">📁</div>
             <p class="upload-text">点击上传或拖拽图片到这里</p>
             <p class="upload-hint">💡 支持 JPG / PNG / WebP，也可以截图后直接 <kbd>Ctrl+V</kbd> / <kbd>Cmd+V</kbd> 粘贴</p>
-            <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp" multiple hidden>
+            <input type="file" id="fileInput" accept="image/*" multiple hidden>
           </div>
 
           <!-- Thumbnail strip -->
@@ -95,15 +95,30 @@
           <!-- Playback controls -->
           <div id="controls" class="controls hidden">
             <button id="playBtn" class="btn-play">▶ 播放</button>
-            <div class="speed-control">
-              <label for="speedSlider">速度</label>
-              <input type="range" id="speedSlider" min="0.3" max="3.0" step="0.1" value="1.0">
-              <span id="speedDisplay">1.0x</span>
+            <span id="countdownBadge" class="countdown-badge hidden">5</span>
+            <div class="stepper-group">
+              <div class="stepper-row">
+                <button class="stepper-btn" data-ctrl="speed" data-dir="-1">−</button>
+                <span id="speedDisplay" class="stepper-value">1.0x</span>
+                <button class="stepper-btn" data-ctrl="speed" data-dir="1">+</button>
+              </div>
+              <span class="stepper-label">速度</span>
             </div>
-            <div class="zoom-control">
-              <label for="zoomSlider">缩放</label>
-              <input type="range" id="zoomSlider" min="0.5" max="1.0" step="0.1" value="1.0">
-              <span id="zoomDisplay">100%</span>
+            <div class="stepper-group">
+              <div class="stepper-row">
+                <button class="stepper-btn" data-ctrl="delay" data-dir="-1">−</button>
+                <span id="delayDisplay" class="stepper-value">0s</span>
+                <button class="stepper-btn" data-ctrl="delay" data-dir="1">+</button>
+              </div>
+              <span class="stepper-label">延时</span>
+            </div>
+            <div class="stepper-group">
+              <div class="stepper-row">
+                <button class="stepper-btn" data-ctrl="zoom" data-dir="-1">−</button>
+                <span id="zoomDisplay" class="stepper-value">100%</span>
+                <button class="stepper-btn" data-ctrl="zoom" data-dir="1">+</button>
+              </div>
+              <span class="stepper-label">缩放</span>
             </div>
             <button id="resetBtn" class="btn-secondary" title="回到顶部">⏮ 回到顶部</button>
             <button id="fullscreenBtn" class="btn-secondary" title="全屏">⛶ 全屏</button>
@@ -111,28 +126,47 @@
 
           <!-- Merged score viewer -->
           <div id="scoreViewer" class="score-viewer hidden">
-            <img id="mergedImage" alt="曲谱">
+            <div id="scrollWrapper">
+              <img id="mergedImage" alt="曲谱">
+            </div>
           </div>
 
           <!-- Fullscreen overlay -->
           <div id="fullscreenOverlay" class="fullscreen-overlay hidden">
             <div id="fullscreenViewer" class="fullscreen-viewer">
-              <img id="fullscreenImage" alt="曲谱">
+              <div id="fsScrollWrapper">
+                <img id="fullscreenImage" alt="曲谱">
+              </div>
             </div>
             <div id="fullscreenControls" class="fullscreen-controls">
               <div class="fullscreen-controls-inner">
                 <button id="fsPlayBtn" class="fs-btn-play">▶ 播放</button>
-                <div class="fs-speed-control">
-                  <label>速度</label>
-                  <input type="range" id="fsSpeedSlider" min="0.3" max="3.0" step="0.1" value="1.0">
-                  <span id="fsSpeedDisplay">1.0x</span>
+                <span id="fsCountdownBadge" class="countdown-badge fs-countdown-badge hidden">5</span>
+                <div class="stepper-group fs-stepper">
+                  <div class="stepper-row">
+                    <button class="stepper-btn" data-ctrl="speed" data-dir="-1">−</button>
+                    <span id="fsSpeedDisplay" class="stepper-value">1.0x</span>
+                    <button class="stepper-btn" data-ctrl="speed" data-dir="1">+</button>
+                  </div>
+                  <span class="stepper-label">速度</span>
                 </div>
-                <div class="fs-zoom-control">
-                  <label>缩放</label>
-                  <input type="range" id="fsZoomSlider" min="0.5" max="1.0" step="0.1" value="1.0">
-                  <span id="fsZoomDisplay">100%</span>
+                <div class="stepper-group fs-stepper">
+                  <div class="stepper-row">
+                    <button class="stepper-btn" data-ctrl="delay" data-dir="-1">−</button>
+                    <span id="fsDelayDisplay" class="stepper-value">0s</span>
+                    <button class="stepper-btn" data-ctrl="delay" data-dir="1">+</button>
+                  </div>
+                  <span class="stepper-label">延时</span>
                 </div>
-                <button id="fsExitBtn" class="fs-btn" title="退出全屏">⛶ 退出全屏</button>
+                <div class="stepper-group fs-stepper">
+                  <div class="stepper-row">
+                    <button class="stepper-btn" data-ctrl="zoom" data-dir="-1">−</button>
+                    <span id="fsZoomDisplay" class="stepper-value">100%</span>
+                    <button class="stepper-btn" data-ctrl="zoom" data-dir="1">+</button>
+                  </div>
+                  <span class="stepper-label">缩放</span>
+                </div>
+                <button id="fsExitBtn" class="fs-btn" title="回到顶部">⏮ 回到顶部</button>
               </div>
             </div>
             <button id="fsExitBtnTop" class="fs-btn fs-btn-top" title="退出全屏">⛶ 退出</button>
@@ -145,6 +179,6 @@
     <footer class="app-footer">🔒 所有数据仅保存在本地浏览器</footer>
   </div>
 
-  <script type="module" src="script.js?v=3"></script>
+  <script type="module" src="script.js?v=13"></script>
 </body>
 </html>
